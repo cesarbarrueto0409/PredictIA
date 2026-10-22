@@ -18,12 +18,13 @@ waste of perishables). Validation = **last 14 days** of `train.csv`.
 | Data          | pandas, numpy, pyarrow (parquet)        |
 | Model         | LightGBM (global model, all series)     |
 | Charts        | Plotly                                  |
-| UI            | Streamlit (`streamlit run app/app.py`)  |
+| API           | FastAPI + uvicorn (`uvicorn api.main:app --reload --port 8000`) |
+| UI (legacy)   | Streamlit (`streamlit run app/app.py`)  |
 | Intermediate  | `.parquet` files in `data/processed/`   |
 | Config        | `src/config.py` (paths, constants)      |
 | Validation    | `src/schemas.py` (`validate(df, name)`) |
 
-No other frameworks (no Dash, no Flask, no PyTorch, no notebooks in `src/`).
+No other backend frameworks (no Dash, no Flask, no PyTorch, no notebooks in `src/`).
 Notebooks are allowed only in `notebooks/` for exploration and are never imported.
 
 ## 2. Ownership
@@ -192,12 +193,13 @@ waiting for other roles. Run `python -m src.mocks` to check.
 
 - Your module runs standalone: `python -m src.<module>` executes a self-test on mocks.
 - Outputs pass `schemas.validate(df, "<name>")`.
-- `python scripts/smoke_test.py` passes before every merge to `main`.
+- `python scripts/smoke_test.py` and `python scripts/api_contract_test.py` pass before every merge to `main`.
 
 ## 8. API contract (reference — from `COORDINACION_EQUIPO.md` §5.2–5.4)
 
-> Reference only while the app stays on Streamlit. If a REST API is added, this is the
-> agreed surface. Base `/api/v1`, JSON, `snake_case`, ISO dates, CORS for the front.
+> **Implemented** in `api/main.py` (routes) → `src/service.py` (response builders) →
+> `src/forecast.py` (training bundle). Verified by `python scripts/api_contract_test.py [--real]`.
+> Base `/api/v1`, JSON, `snake_case`, ISO dates, CORS for the front.
 > Errors: `{ "error": { "code", "message", "details" } }`.
 > Common query params: `store_nbr`, `family`, `date_from`, `date_to`.
 
@@ -356,3 +358,46 @@ Params: `model_id`, `week_start`, `service_level=0.9`, `store_nbr`, `family`, `p
 
 > If time is tight, the backend may precompute everything after training and serve JSON
 > from files. Valid for a hackathon as long as the contract is respected.
+
+### 8.4 Implementation notes (what the front must know)
+
+**Running**
+- `uvicorn api.main:app --reload --port 8000` → base URL `http://localhost:8000/api/v1`, interactive docs at `/docs`.
+- On startup the API loads `data/raw/train.csv` as dataset `ds_default` and the last saved model
+  (`data/processed/models/`). If there is none, it **auto-trains** one (~1.5–2 min on real data).
+  While no model exists, model endpoints return **503 `model_not_ready`**: poll `/health` or `/train/{job_id}`.
+- `PREDICTIA_MOCK=1` → fake data, trains in seconds (for front development without CSVs).
+
+**Parameters**
+- `model_id` is **optional** everywhere: defaults to the latest trained model.
+- `dataset_id` is optional on `/meta` and `/eda/*`: defaults to the latest model's dataset.
+- `family` contains spaces and `/` (e.g. `GROCERY I`, `BREAD/BAKERY`): always URL-encode it.
+- `POST /train`: `horizon_days` ∈ [1, 14] (features are lagged 14 days, so >14 would leak);
+  `validation_days` ∈ [7, 28]; defaults 14/14. Values outside → 422.
+- `/eda/promo-lift` and `/eda/volatility` accept `store_nbr`, not `family` (they return one row per family).
+
+**Semantics**
+- `/forecast`: `is_future=false` = validation window (has `y_real`), `is_future=true` = next `horizon_days`
+  after the last date (`y_real: null`). Future promotions are unknown: assumed equal to the same weekday 14 days earlier.
+  Without `store_nbr` **and** `family`, points are **summed** over the missing dimension(s)
+  (`y_p10`/`y_p90` are summed too, so the aggregated band is conservative).
+- `/metrics`: `wape = Σ|y - ŷ| / Σy`, `bias = mean(ŷ - y)` in units (positive = over-forecast),
+  `interval_coverage` = share of actuals inside [p10, p90]. Baseline is **`same_weekday_2_weeks_ago`**
+  (`sales_lag_14`, it respects the 14-day horizon), not last week. `improvement.*_pct = 1 - model / baseline`.
+- `/metrics/horizon`: weeks of the validation window (14 days → weeks 1 and 2).
+- `/metrics/ranking`: WAPE per store-family; series with zero sales in the window are excluded.
+- `/business-kpis` (validation window, order = forecast + z(service_level)·σ):
+  - model σ from the p10–p90 interval, baseline σ = residual std per store-family (last 28 train days);
+  - `stockout_risk` = share of store-family-days with demand > order;
+  - `fill_rate` = 1 − unmet units / demand;
+  - `waste_units` = leftover units on **perishables**; `waste_pct` = waste / ordered perishables;
+  - `waste_risk` = share of perishable days with leftover > 25% of the order;
+  - `delta.*_pct = model / baseline − 1` (negative = model better).
+- `/order-suggestion`: 7 days from `week_start` (default = first future day). `forecast` = Σ pred,
+  `safety_stock` = z·√Σσ², `recommended_order` = ceil(forecast + safety_stock).
+  `risk`: weekly relative width Σ(p90−p10)/Σpred < 0.5 low, < 1.5 medium, else high; **+1 level if perishable**;
+  always `low` if forecast < 7 units/week. Sorted by `store_nbr, family`. `page_size` ≤ 2000.
+- `/eda/heatmap`: `values[i][j]` = total sales of `stores[i]` × `families[j]`.
+- `/eda/seasonality`: average **daily chain total** by weekday (0 = Monday) and month.
+- `/eda/top?by=store`: `key` is an int (store number); `by=family`: `key` is a string.
+- `/health` also returns `{status, mock, datasets, models, latest_model}`.

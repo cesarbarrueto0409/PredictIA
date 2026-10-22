@@ -12,8 +12,11 @@ python -m venv .venv
 # Windows: .venv\Scripts\activate    |  Mac/Linux: source .venv/bin/activate
 pip install -r requirements.txt
 python scripts/smoke_test.py          # end-to-end check on fake data
-streamlit run app/app.py              # open the app
+python scripts/api_contract_test.py   # every API endpoint matches CONTRACTS.md §8 (add --real for real data)
+uvicorn api.main:app --reload --port 8000   # REST API -> http://localhost:8000/docs
 ```
+
+Front-end without CSVs: start the API with fake data (`PREDICTIA_MOCK=1`, PowerShell: `$env:PREDICTIA_MOCK=1`).
 
 Data: download the Kaggle dataset **"Store Sales - Time Series Forecasting"** and put the CSVs in
 `data/raw/` (`train.csv`, `stores.csv`, `holidays_events.csv`, `transactions.csv`, `oil.csv`).
