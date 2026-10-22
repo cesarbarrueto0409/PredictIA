@@ -66,7 +66,7 @@ def build_features(train: pd.DataFrame, stores: pd.DataFrame | None = None,
         df[col] = df[col].fillna(default)
     df["cluster"] = df["cluster"].astype(int)
 
-    df["dayofweek"] = df["date"].dt.dayofweek
+    df["dayofweek"] = df["date"].dt.day_of_week
     df["day"] = df["date"].dt.day
     df["month"] = df["date"].dt.month
     df["is_payday"] = ((df["day"] == 15) | df["date"].dt.is_month_end).astype(int)

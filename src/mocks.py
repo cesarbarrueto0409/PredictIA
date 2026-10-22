@@ -15,7 +15,7 @@ def mock_raw_train(days: int = 120, seed: int = 0) -> pd.DataFrame:
     idx = pd.MultiIndex.from_product([dates, STORES, FAMILIES], names=["date", "store_nbr", "family"])
     df = idx.to_frame(index=False)
     base = rng.uniform(20, 500, size=len(STORES) * len(FAMILIES))
-    weekly = 1 + 0.3 * np.sin(2 * np.pi * df["date"].dt.dayofweek / 7)
+    weekly = 1 + 0.3 * np.sin(2 * np.pi * df["date"].dt.day_of_week / 7)
     df["onpromotion"] = rng.poisson(2, len(df))
     df["sales"] = (np.tile(base, days) * weekly * (1 + 0.05 * df["onpromotion"])
                    * rng.lognormal(0, 0.15, len(df))).round(2)
@@ -26,7 +26,7 @@ def mock_raw_train(days: int = 120, seed: int = 0) -> pd.DataFrame:
 def mock_features(days: int = 120, seed: int = 0) -> pd.DataFrame:
     df = mock_raw_train(days, seed).drop(columns="id")
     df = df.sort_values(["store_nbr", "family", "date"]).reset_index(drop=True)
-    df["dayofweek"] = df["date"].dt.dayofweek
+    df["dayofweek"] = df["date"].dt.day_of_week
     df["day"] = df["date"].dt.day
     df["month"] = df["date"].dt.month
     df["is_payday"] = ((df["day"] == 15) | df["date"].dt.is_month_end).astype(int)
