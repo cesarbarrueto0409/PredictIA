@@ -18,7 +18,12 @@ from src import data, model
 from src.config import (CATEGORICAL_COLS, FEATURE_COLS, HORIZON_DAYS, PERISHABLE_FAMILIES,
                         TARGET)
 
-QUANTILE_PARAMS = {**model.PARAMS, "objective": "quantile", "n_estimators": 300, "learning_rate": 0.08}
+# Independent from model.PARAMS so Role B can change the point model freely.
+QUANTILE_PARAMS = dict(
+    objective="quantile", learning_rate=0.08, num_leaves=127, min_child_samples=50,
+    feature_fraction=0.8, bagging_fraction=0.8, bagging_freq=1, n_estimators=300,
+    random_state=42, verbose=-1,
+)
 MAX_VALIDATION_DAYS = 28
 BASELINE_NAME = "same_weekday_2_weeks_ago"  # sales_lag_14: same weekday, respects the 14-day horizon
 

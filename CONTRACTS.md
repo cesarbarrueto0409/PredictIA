@@ -35,6 +35,7 @@ Notebooks are allowed only in `notebooks/` for exploration and are never importe
 | B — Model     | `src/model.py`                  | everything else                  |
 | C — Business  | `src/business.py`               | everything else                  |
 | D — App/Story | `app/`                          | everything else                  |
+| Backend API   | `api/`, `src/forecast.py`, `src/service.py` | everything else      |
 | Shared (ask first) | `src/config.py`, `src/schemas.py`, `src/pipeline.py`, `src/mocks.py`, `CONTRACTS.md` | |
 
 ## 3. Raw inputs (`data/raw/`, from Kaggle, never committed)
@@ -45,6 +46,7 @@ Notebooks are allowed only in `notebooks/` for exploration and are never importe
 | `stores.csv`          | `store_nbr, city, state, type, cluster`                         |
 | `holidays_events.csv` | `date, type, locale, locale_name, description, transferred`     |
 | `transactions.csv`    | `date, store_nbr, transactions`                                 |
+| `oil.csv`             | `date, dcoilwtico` (daily WTI price, gaps on weekends)          |
 
 ## 4. Schemas (enforced by `src/schemas.py`)
 
@@ -401,3 +403,78 @@ Params: `model_id`, `week_start`, `service_level=0.9`, `store_nbr`, `family`, `p
 - `/eda/seasonality`: average **daily chain total** by weekday (0 = Monday) and month.
 - `/eda/top?by=store`: `key` is an int (store number); `by=family`: `key` is a string.
 - `/health` also returns `{status, mock, datasets, models, latest_model}`.
+
+## 9. Role B guide — Model (`src/model.py`)
+
+Everything Role B needs to change the model without breaking Data, Business, the API or the front.
+
+### 9.1 Inputs available
+- Features: `from src.data import load_features; f = load_features()` (reads `data/processed/features.parquet`).
+  Rebuild it with `python -m src.data --real` (~15 s) if missing or after Role A changes.
+- Columns: §4.1. Model inputs = `config.FEATURE_COLS`; categoricals = `config.CATEGORICAL_COLS`
+  (cast to pandas `category`, LightGBM handles them natively). Target = `config.TARGET` (`sales`).
+- Real data size: **1.05 M rows** (54 stores × 33 families, from `TRAIN_START = 2016-01-01` to 2017-08-15).
+  Validation = last 14 days (2017-08-02 … 2017-08-15); `NaN` is allowed in lag columns (LightGBM handles it).
+
+### 9.2 Who calls your code (do not break these)
+
+| Caller | Uses | Requirement |
+|---|---|---|
+| `src/pipeline.py` → Streamlit app, smoke test | `run_model`, `feature_importance` | §4.2–4.4 schemas |
+| `src/forecast.py` → **REST API** (`/forecast`, `/metrics`, `/business-kpis`, `/order-suggestion`) | `split_train_valid`, `train_model`, `predict`, `feature_importance` | see below |
+
+Rules:
+1. **Keep the names and signatures in §5.** You may add new functions/params with defaults.
+2. `predict(model, df)` must return a **numpy array in sales units, `>= 0`**, aligned with `df` rows,
+   whatever the internal target transform (log1p, tweedie on raw sales, etc.).
+3. `train_model(train_df)` receives a features DataFrame (§4.1) and must only use columns in `FEATURE_COLS`.
+   If you need a new feature, ask Role A to add it in `data.py` + `FEATURE_COLS` (never compute features in `model.py`
+   that the API's future rows would not have).
+4. `feature_importance(model)` → DataFrame `feature, importance` sorted descending.
+5. `PARAMS` is yours: change it freely. The API's quantile models (p10/p90) use their own params in `forecast.py`.
+6. **Training time budget:** point model ≤ ~45 s on real data. The API trains the point model + 2 quantile models
+   on startup/`POST /train` (~2 min today); a much slower model makes the demo slow.
+7. No leakage: never use `sales` of the validation window or any feature not lagged ≥ 14 days.
+
+### 9.3 Current benchmark to beat (real data, `model.py` v0)
+
+| Metric (validation, 14 days) | Model v0 | Baseline (`sales_lag_14`) |
+|---|---|---|
+| RMSLE | **0.393** | 0.621 |
+| WAPE  | **0.149** | 0.214 |
+| MAPE  | 34.0 % | 50.4 % |
+| Bias (mean pred − actual, units/day) | **+23.4** (over-forecast) | +21.9 |
+| Interval coverage p10–p90 (API) | 78 % (target 80 %) | — |
+| Training time (point model) | ~19 s | — |
+
+Top features: `sales_dow_mean_4w` ≫ `sales_roll_mean_7` > `sales_roll_mean_14` > `sales_roll_mean_28` > `store_promo_total`.
+
+By family (WAPE / bias): big families are good but **over-forecast** — GROCERY I 0.12 / +145, BEVERAGES 0.18 / +192,
+PRODUCE 0.10 / +126, CLEANING 0.22 / +148, DAIRY 0.12 / +69. Worst WAPE (sales > 1000): HARDWARE 0.74,
+SCHOOL AND OFFICE SUPPLIES 0.68 (**under-forecast**, back-to-school season in August), LINGERIE 0.48.
+
+### 9.4 Where the value is (priority order)
+1. **Reduce the positive bias** — over-forecasting perishables is waste in `/business-kpis`. Try `objective="tweedie"`
+   (on raw sales) or check the log1p back-transform; compare bias per family.
+2. Tune LightGBM (`num_leaves`, `learning_rate`, `n_estimators`, `min_child_samples`) with early stopping on the
+   last 14 days of the train split (never on the validation window).
+3. Zero-forecast series that sold 0 in the last 28 days (`sales_roll_mean_28 == 0`; 14.6 % of validation rows are 0).
+4. Optional: per-family models or sample weights for big families.
+5. Ask Role A for a back-to-school feature if SCHOOL AND OFFICE SUPPLIES matters for the story.
+
+### 9.5 How to evaluate and validate
+```bash
+python -m src.model                          # self-test on mocks
+python scripts/smoke_test.py                 # pipeline end-to-end (mocks)
+python scripts/api_contract_test.py --real   # API on real data with YOUR model (~2 min)
+```
+Quick experiment on real data (put scripts in `notebooks/` or `scripts/`, never imported by the app):
+```python
+from src.data import load_features
+from src import model
+preds, metrics, m = model.run_model(load_features())
+print(metrics); print(model.metrics_by(preds, "family").head(10))
+print((preds.pred - preds.actual).groupby(preds.family).mean().sort_values())  # bias per family
+```
+Report each experiment as a row (change → RMSLE, WAPE, bias, train seconds) in your PR description.
+After merging a new model, delete `data/processed/models/real/*.pkl` (or call `POST /train`) so the API retrains with it.
