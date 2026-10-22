@@ -84,7 +84,7 @@ One row per `(date, store_nbr, family)` in the **validation window only**.
 | `date`          | datetime64[ns] |                                       |
 | `store_nbr`     | int            |                                       |
 | `family`        | str            |                                       |
-| `onpromotion`   | int            |                                       |
+| `onpromotion`   | int (0/1)      |                                       |
 | `is_holiday`    | int (0/1)      |                                       |
 | `actual`        | float          | real sales                            |
 | `pred`          | float          | model prediction, `>= 0`              |
@@ -167,3 +167,166 @@ waiting for other roles. Run `python -m src.mocks` to check.
 - Your module runs standalone: `python -m src.<module>` executes a self-test on mocks.
 - Outputs pass `schemas.validate(df, "<name>")`.
 - `python scripts/smoke_test.py` passes before every merge to `main`.
+
+## 8. API contract (reference — from `COORDINACION_EQUIPO.md` §5.2–5.4)
+
+> Reference only while the app stays on Streamlit. If a REST API is added, this is the
+> agreed surface. Base `/api/v1`, JSON, `snake_case`, ISO dates, CORS for the front.
+> Errors: `{ "error": { "code", "message", "details" } }`.
+> Common query params: `store_nbr`, `family`, `date_from`, `date_to`.
+
+### 8.1 Endpoint summary (§5.2)
+
+| Method | Route | Purpose |
+|---|---|---|
+| GET | `/health` | Service liveness |
+| GET | `/meta` | Stores and families catalog |
+| POST | `/datasets` | Upload CSV |
+| GET | `/datasets/{dataset_id}/summary` | Dataset summary |
+| GET | `/eda/timeseries` | Sales over time |
+| GET | `/eda/top` | Top families or stores |
+| GET | `/eda/seasonality` | Weekly and monthly seasonality |
+| GET | `/eda/heatmap` | Store × family matrix |
+| GET | `/eda/promo-lift` | Promo lift by family |
+| GET | `/eda/volatility` | Coefficient of variation by family |
+| POST | `/train` | Launch training |
+| GET | `/train/{job_id}` | Training status |
+| GET | `/forecast` | Actual vs. forecast with intervals |
+| GET | `/metrics` | WAPE, RMSLE, bias, coverage, baseline |
+| GET | `/metrics/horizon` | Error by horizon week |
+| GET | `/metrics/ranking` | Best and worst store-family |
+| GET | `/business-kpis` | Stockout, waste, fill rate |
+| GET | `/order-suggestion` | Recommended order |
+
+### 8.2 Details and examples (§5.3)
+
+**`GET /meta`**
+```json
+{
+  "stores": [{ "store_nbr": 1 }, { "store_nbr": 2 }],
+  "families": [
+    { "family": "DAIRY", "is_perishable": true },
+    { "family": "BEVERAGES", "is_perishable": false }
+  ],
+  "date_min": "2013-01-01",
+  "date_max": "2017-08-15"
+}
+```
+
+**`POST /datasets`** (multipart, field `file`)
+```json
+{
+  "dataset_id": "ds_001",
+  "summary": {
+    "date_min": "2013-01-01",
+    "date_max": "2017-08-15",
+    "n_stores": 54,
+    "n_families": 33,
+    "n_rows": 3000888,
+    "pct_zero_sales": 0.31
+  }
+}
+```
+
+**`POST /train`**
+```json
+// request
+{ "dataset_id": "ds_001", "horizon_days": 28, "validation_days": 28, "quantiles": [0.1, 0.5, 0.9] }
+// response
+{ "job_id": "job_123", "status": "queued" }
+```
+
+**`GET /train/{job_id}`**
+```json
+{ "job_id": "job_123", "status": "running", "progress": 0.45, "model_id": null, "message": "Entrenando modelo" }
+```
+`status` ∈ `queued | running | done | failed`. When `done`, `model_id` carries a value.
+
+**`GET /forecast`**
+Params: `model_id`, `store_nbr`, `family`, `date_from`, `date_to`.
+```json
+{
+  "store_nbr": 1,
+  "family": "DAIRY",
+  "points": [
+    { "date": "2017-08-01", "y_real": 120, "y_pred": 115.4, "y_p10": 90.2, "y_p90": 142.7, "is_future": false },
+    { "date": "2017-08-16", "y_real": null, "y_pred": 118.0, "y_p10": 92.0, "y_p90": 145.0, "is_future": true }
+  ]
+}
+```
+
+**`GET /metrics`**
+Params: `model_id`, optional filters.
+```json
+{
+  "model": { "wape": 0.21, "rmsle": 0.45, "bias": -1.3, "interval_coverage": 0.78 },
+  "baseline": { "name": "same_weekday_last_week", "wape": 0.34, "rmsle": 0.62, "bias": 0.4 },
+  "improvement": { "wape_pct": 0.38, "rmsle_pct": 0.27 }
+}
+```
+
+**`GET /metrics/horizon`**
+```json
+{ "by_week": [
+  { "week": 1, "wape": 0.18, "baseline_wape": 0.30 },
+  { "week": 2, "wape": 0.21, "baseline_wape": 0.33 }
+] }
+```
+
+**`GET /metrics/ranking`**
+Params: `model_id`, `order=best|worst`, `limit=20`.
+```json
+{ "items": [
+  { "store_nbr": 3, "family": "PRODUCE", "wape": 0.12, "sales_total": 15230 }
+] }
+```
+
+**`GET /business-kpis`**
+Params: `model_id`, `service_level=0.9`, `only_perishable=false`.
+```json
+{
+  "model":    { "stockout_risk": 0.12, "waste_risk": 0.18, "fill_rate": 0.94, "waste_units": 8200, "waste_pct": 0.07 },
+  "baseline": { "stockout_risk": 0.21, "waste_risk": 0.29, "fill_rate": 0.88, "waste_units": 13100, "waste_pct": 0.11 },
+  "delta":    { "stockout_risk_pct": -0.43, "waste_units_pct": -0.37 }
+}
+```
+
+**`GET /order-suggestion`**
+Params: `model_id`, `week_start`, `service_level=0.9`, `store_nbr`, `family`, `page`, `page_size`.
+```json
+{
+  "week_start": "2017-08-16",
+  "items": [
+    {
+      "store_nbr": 1,
+      "family": "DAIRY",
+      "forecast": 820,
+      "recommended_order": 905,
+      "safety_stock": 85,
+      "risk": "medium",
+      "is_perishable": true
+    }
+  ],
+  "page": 1,
+  "total": 1782
+}
+```
+`risk` ∈ `low | medium | high`. Proposed rule: relative interval width `(p90 - p10) / y_pred` and perishability.
+
+**EDA endpoints**
+
+- `GET /eda/timeseries?granularity=day|week&store_nbr&family` → `{ "points": [{ "date", "sales" }] }`
+- `GET /eda/top?by=family|store&limit=10` → `{ "items": [{ "key", "sales" }] }`
+- `GET /eda/seasonality` → `{ "by_weekday": [{ "weekday": 0, "avg_sales": 0 }], "by_month": [{ "month": 1, "avg_sales": 0 }] }`
+- `GET /eda/heatmap` → `{ "stores": [], "families": [], "values": [[0]] }`
+- `GET /eda/promo-lift` → `{ "items": [{ "family", "avg_promo", "avg_no_promo", "lift_pct" }] }`
+- `GET /eda/volatility` → `{ "items": [{ "family", "cv" }] }`
+
+### 8.3 Implementation priority (backend) (§5.4)
+
+1. **P0 (unblocks the front):** `/meta`, `/forecast`, `/metrics`, `/order-suggestion`.
+2. **P1:** `/datasets`, `/train`, `/train/{job_id}`, `/business-kpis`.
+3. **P2:** `/metrics/horizon`, `/metrics/ranking`, all `/eda/*`.
+
+> If time is tight, the backend may precompute everything after training and serve JSON
+> from files. Valid for a hackathon as long as the contract is respected.
