@@ -1,0 +1,21 @@
+{
+  "name": "predictia-walkthrough",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "studio": "remotion studio",
+    "render": "remotion render Walkthrough out/predictia-walkthrough.mp4",
+    "still": "remotion still Walkthrough out/still.png --frame=60"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.399",
+    "@remotion/google-fonts": "4.0.399",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "remotion": "4.0.399"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.12",
+    "typescript": "5.6.3"
+  }
+}
