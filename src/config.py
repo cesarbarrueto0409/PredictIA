@@ -17,10 +17,20 @@ TARGET = "sales"
 
 CATEGORICAL_COLS = ["store_nbr", "family", "city", "store_type", "cluster"]
 FEATURE_COLS = [
+    # identity
     "store_nbr", "family", "city", "store_type", "cluster",
-    "onpromotion", "dayofweek", "day", "month", "is_payday", "is_holiday",
-    "sales_lag_14", "sales_lag_21", "sales_lag_28",
-    "sales_roll_mean_7", "sales_roll_mean_28",
+    # calendar
+    "dayofweek", "day", "month", "weekofyear", "is_weekend", "is_payday",
+    "days_to_christmas", "is_earthquake",
+    # holidays & events
+    "is_holiday", "is_national_holiday", "is_local_holiday", "is_event",
+    # promotions
+    "onpromotion", "has_promo", "store_promo_total", "promo_roll_mean_28",
+    # sales history (all shifted >= HORIZON_DAYS)
+    "sales_lag_14", "sales_lag_21", "sales_lag_28", "sales_lag_35", "sales_dow_mean_4w",
+    "sales_roll_mean_7", "sales_roll_mean_14", "sales_roll_mean_28", "sales_roll_std_28",
+    # external (lagged)
+    "oil_lag_14", "transactions_lag_14",
 ]
 
 PERISHABLE_FAMILIES = {
