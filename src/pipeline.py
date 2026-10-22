@@ -2,8 +2,8 @@
 from src import data, model
 
 
-def run_all(train, stores=None, holidays=None, transactions=None) -> dict:
-    features = data.build_features(train, stores, holidays, transactions)
+def run_all(train, stores=None, holidays=None, transactions=None, oil=None) -> dict:
+    features = data.build_features(train, stores, holidays, transactions, oil)
     predictions, metrics, fitted = model.run_model(features)
     return {
         "features": features,

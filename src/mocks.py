@@ -23,23 +23,27 @@ def mock_raw_train(days: int = 120, seed: int = 0) -> pd.DataFrame:
     return df
 
 
+def mock_stores() -> pd.DataFrame:
+    return pd.DataFrame({"store_nbr": STORES, "city": ["Quito", "Guayaquil", "Cuenca"],
+                         "state": ["Pichincha", "Guayas", "Azuay"], "type": ["A", "B", "D"],
+                         "cluster": [1, 2, 3]})
+
+
+def mock_holidays() -> pd.DataFrame:
+    return pd.DataFrame({
+        "date": pd.to_datetime(["2017-05-01", "2017-05-24", "2017-07-25", "2017-05-14"]),
+        "type": ["Holiday", "Holiday", "Holiday", "Event"],
+        "locale": ["National", "National", "Local", "National"],
+        "locale_name": ["Ecuador", "Ecuador", "Guayaquil", "Ecuador"],
+        "description": ["Dia del Trabajo", "Batalla de Pichincha", "Fundacion de Guayaquil", "Dia de la Madre"],
+        "transferred": [False, False, False, False],
+    })
+
+
 def mock_features(days: int = 120, seed: int = 0) -> pd.DataFrame:
-    df = mock_raw_train(days, seed).drop(columns="id")
-    df = df.sort_values(["store_nbr", "family", "date"]).reset_index(drop=True)
-    df["dayofweek"] = df["date"].dt.day_of_week
-    df["day"] = df["date"].dt.day
-    df["month"] = df["date"].dt.month
-    df["is_payday"] = ((df["day"] == 15) | df["date"].dt.is_month_end).astype(int)
-    df["is_holiday"] = (df["date"].dt.strftime("%m-%d").isin(["05-01", "05-24"])).astype(int)
-    df["city"] = df["store_nbr"].map({1: "Quito", 2: "Guayaquil", 3: "Cuenca"})
-    df["store_type"] = df["store_nbr"].map({1: "A", 2: "B", 3: "D"})
-    df["cluster"] = df["store_nbr"]
-    g = df.groupby(["store_nbr", "family"])["sales"]
-    for lag in (14, 21, 28):
-        df[f"sales_lag_{lag}"] = g.shift(lag)
-    for w in (7, 28):
-        df[f"sales_roll_mean_{w}"] = g.transform(lambda s: s.shift(14).rolling(w).mean())
-    return df
+    # Built with the real feature builder so mocks always match FEATURE_COLS.
+    from src.data import build_features
+    return build_features(mock_raw_train(days, seed), mock_stores(), mock_holidays())
 
 
 def mock_predictions(days: int = 120, seed: int = 0) -> pd.DataFrame:

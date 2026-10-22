@@ -71,6 +71,28 @@ One row per `(date, store_nbr, family)`. Sorted by `store_nbr, family, date`.
 | `sales_roll_mean_7`    | float          | mean of last 7 days, **shifted by 14**          |
 | `sales_roll_mean_28`   | float          | mean of last 28 days, **shifted by 14**         |
 
+**Extra feature columns (data v1)** — all listed in `config.FEATURE_COLS`:
+
+| Column                | Notes                                                              |
+|-----------------------|--------------------------------------------------------------------|
+| `state`               | from stores.csv (not a model feature, used for regional holidays)  |
+| `weekofyear`, `is_weekend` | calendar                                                      |
+| `days_to_christmas`   | 0–98 in the run-up to Dec 25, 99 otherwise                         |
+| `is_earthquake`       | 2016-04-16 … 2016-05-15 (Manabí earthquake relief period)          |
+| `is_national_holiday` | Holiday/Transfer/Bridge/Additional, national; `Work Day` is NOT a holiday |
+| `is_local_holiday`    | regional (matches store `state`) or local (matches store `city`)   |
+| `is_event`            | national events (Mother's Day, World Cup, Black Friday…)           |
+| `has_promo`           | `onpromotion > 0`                                                  |
+| `store_promo_total`   | items on promo in the whole store that day                         |
+| `promo_roll_mean_28`  | onpromotion rolling mean, shifted 14                               |
+| `sales_lag_35`, `sales_dow_mean_4w` | lag 35; mean of lags 14/21/28/35 (same weekday)      |
+| `sales_roll_mean_14`, `sales_roll_std_28` | shifted 14                                     |
+| `oil_lag_14`          | daily WTI oil price (ffilled), shifted 14 (NaN if oil.csv missing) |
+| `transactions_lag_14` | store transactions shifted 14 (NaN if transactions.csv missing)    |
+
+Missing dates (Dec 25, stores closed) are filled with 0 internally so `shift(n)` means
+`n` calendar days, and then dropped from the output.
+
 **Leakage rule:** every sales-derived feature must be shifted by `>= HORIZON_DAYS` (14),
 so the model can predict the whole validation window without knowing its sales.
 Extra features are welcome, but must be added to `FEATURE_COLS` in `config.py`
@@ -127,11 +149,15 @@ Columns: `feature: str, importance: float` (sorted descending).
 ```python
 # src/data.py  (Role A)
 def load_raw(raw_dir: Path = RAW_DIR) -> dict[str, pd.DataFrame]: ...
-    # keys: "train" (required), "stores", "holidays", "transactions" (None if file missing)
+    # keys: "train" (required), "stores", "holidays", "transactions", "oil" (None if file missing)
 def build_features(train: pd.DataFrame, stores: pd.DataFrame | None = None,
                    holidays: pd.DataFrame | None = None,
-                   transactions: pd.DataFrame | None = None) -> pd.DataFrame: ...
+                   transactions: pd.DataFrame | None = None,
+                   oil: pd.DataFrame | None = None) -> pd.DataFrame: ...
     # returns schema "features"
+def save_features(features, path=PROCESSED_DIR / "features.parquet") -> Path: ...
+def load_features(path=PROCESSED_DIR / "features.parquet") -> pd.DataFrame: ...
+def data_quality_report(train: pd.DataFrame) -> dict: ...   # facts for the pitch
 
 # src/model.py  (Role B)
 def split_train_valid(features: pd.DataFrame, valid_days: int = VALID_DAYS) -> tuple[pd.DataFrame, pd.DataFrame]: ...
@@ -152,7 +178,7 @@ def business_kpis(predictions: pd.DataFrame) -> dict: ...
     # stockout = sum(max(actual - pred, 0)); waste = sum(max(pred - actual, 0)) on perishables
 
 # src/pipeline.py  (shared glue, used by the app)
-def run_all(train: pd.DataFrame, stores=None, holidays=None, transactions=None) -> dict: ...
+def run_all(train: pd.DataFrame, stores=None, holidays=None, transactions=None, oil=None) -> dict: ...
     # {"features", "predictions", "metrics", "model", "importance"}
 ```
 
